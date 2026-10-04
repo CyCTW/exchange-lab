@@ -7,6 +7,7 @@ pub mod histogram;
 pub mod journal;
 pub mod orderbook;
 pub mod ring;
+pub mod sim;
 pub mod types;
 pub mod workload;
 

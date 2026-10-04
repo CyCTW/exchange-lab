@@ -11,6 +11,7 @@
 - Aeron（傳輸、Archive、Cluster）— https://github.com/real-logic/aeron ；Aeron Cluster 文件位於其 wiki
 - Agrona（低延遲資料結構）— https://github.com/real-logic/agrona
 - Chronicle Queue — https://github.com/OpenHFT/Chronicle-Queue
+- exchange-core（開源 Java 撮合引擎，LMAX Disruptor 架構；風控依用戶分片、撮合依商品分片，與 [07](07-simulation-architecture.md) 的設計相近）— https://github.com/exchange-core/exchange-core
 
 ## 協定規格
 

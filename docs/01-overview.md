@@ -78,4 +78,5 @@
 - [04 · 硬體、作業系統與網路](04-system-tuning.md)
 - [05 · 可靠性：定序、journal、複製、行情恢復](05-reliability.md)
 - [06 · 如何量測，以及本 lab 的實驗結果](06-measurement.md)
+- [07 · 多用戶、多商品的交易所模擬與架構設計](07-simulation-architecture.md)
 - [參考資料](references.md)

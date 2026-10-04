@@ -54,6 +54,15 @@ impl Histogram {
         self.sum += v as u128;
     }
 
+    pub fn merge(&mut self, other: &Histogram) {
+        for (a, b) in self.counts.iter_mut().zip(&other.counts) {
+            *a += b;
+        }
+        self.total += other.total;
+        self.max = self.max.max(other.max);
+        self.sum += other.sum;
+    }
+
     pub fn count(&self) -> u64 {
         self.total
     }
