@@ -1,0 +1,17 @@
+[package]
+name = "exchange-lab"
+version = "0.1.0"
+edition = "2021"
+description = "Research prototype: low-latency, high-throughput exchange core (LMAX-style)"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = true
+
+[profile.bench]
+inherits = "release"
