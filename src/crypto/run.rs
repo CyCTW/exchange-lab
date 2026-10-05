@@ -13,13 +13,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::gateway::{Gateway, GatewayIo, GatewayStats};
-use super::idle::Clock;
 use super::matcher::{Matcher, MatcherIo, MatcherStats};
 use super::mdata::{self, MdStats};
 use super::model::*;
 use super::risk::{RiskFinal, RiskIo, RiskShard};
 use crate::affinity::pin_current_thread;
 use crate::histogram::Histogram;
+use crate::idle::Clock;
 use crate::ring;
 
 pub struct SimReport {
@@ -64,7 +64,7 @@ pub fn run(cfg: SimConfig) -> SimReport {
     let symbols = Arc::new(make_symbols(cfg.symbols));
     let placement = Arc::new(cfg.placement_map());
     let millis = cfg.duration.as_millis() as usize + 2_000;
-    let path = Arc::new(PricePath::new(&symbols, millis, cfg.seed));
+    let path = Arc::new(price_path(&symbols, millis, cfg.seed));
     let cap = cfg.ring_capacity;
     let (g, r, m) = (cfg.gateways, cfg.risk_shards, cfg.matchers);
 

@@ -339,3 +339,182 @@ fn spsc_ring_drops_unconsumed_items() {
     }
     assert_eq!(Arc::strong_count(&marker), 1);
 }
+
+fn crosses(ev: &[Event]) -> Vec<(OrderId, OrderId, Price, Qty)> {
+    ev.iter()
+        .filter_map(|e| match *e {
+            Event::Cross {
+                buy,
+                sell,
+                price,
+                qty,
+            } => Some((buy, sell, price, qty)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn auction_mode_rests_crossing_orders_and_rejects_ioc() {
+    let mut b = book();
+    b.set_auction(true);
+    run(&mut b, limit(1, Side::Buy, 105, 10));
+    run(&mut b, limit(2, Side::Sell, 100, 4));
+    assert_eq!(b.best(Side::Buy), Some((105, 10)));
+    assert_eq!(b.best(Side::Sell), Some((100, 4)));
+    assert_eq!(
+        run(&mut b, ioc(3, Side::Buy, 110, 1)),
+        vec![Event::Rejected {
+            id: 3,
+            reason: RejectReason::InvalidPhase
+        }]
+    );
+}
+
+#[test]
+fn uncross_picks_max_volume_price_and_fills_in_priority_order() {
+    let mut b = book();
+    b.set_auction(true);
+    // 買：102×5（id1）、101×5（id2）、100×5（id3）；賣：99×4（id4）、100×4（id5）、101×10（id6）
+    run(&mut b, limit(1, Side::Buy, 102, 5));
+    run(&mut b, limit(2, Side::Buy, 101, 5));
+    run(&mut b, limit(3, Side::Buy, 100, 5));
+    run(&mut b, limit(4, Side::Sell, 99, 4));
+    run(&mut b, limit(5, Side::Sell, 100, 4));
+    run(&mut b, limit(6, Side::Sell, 101, 10));
+    // 價格 100：買 15、賣 8 → 8；價格 101：買 10、賣 18 → 10（最大）
+    let mut ev = Vec::new();
+    let r = b.uncross(100, &mut |e| ev.push(e));
+    assert_eq!(r, Some((101, 10)));
+    assert_eq!(
+        crosses(&ev),
+        vec![
+            (1, 4, 101, 4),
+            (1, 5, 101, 1),
+            (2, 5, 101, 3),
+            (2, 6, 101, 2)
+        ]
+    );
+    b.set_auction(false);
+    assert_eq!(b.best(Side::Buy), Some((100, 5)));
+    assert_eq!(b.best(Side::Sell), Some((101, 8)));
+}
+
+#[test]
+fn uncross_ties_use_reference_price_when_inside_range() {
+    let mut sink = |_| {};
+    // 90~110 任何價格成交量、買賣差都相同 → 用參考價
+    let mut b = book();
+    b.set_auction(true);
+    run(&mut b, limit(1, Side::Buy, 110, 5));
+    run(&mut b, limit(2, Side::Sell, 90, 5));
+    assert_eq!(b.uncross(97, &mut sink), Some((97, 5)));
+    // 參考價在區間外 → 取最接近參考價的那一端
+    let mut b = book();
+    b.set_auction(true);
+    run(&mut b, limit(1, Side::Buy, 110, 5));
+    run(&mut b, limit(2, Side::Sell, 90, 5));
+    assert_eq!(b.uncross(200, &mut sink), Some((110, 5)));
+}
+
+#[test]
+fn uncross_on_uncrossed_book_does_nothing() {
+    let mut b = book();
+    b.set_auction(true);
+    run(&mut b, limit(1, Side::Buy, 99, 5));
+    run(&mut b, limit(2, Side::Sell, 100, 5));
+    assert_eq!(b.uncross(100, &mut |_| {}), None);
+    assert_eq!(b.order_count(), 2);
+}
+
+/// 與暴力解比對：隨機掛單，檢查競價價格符合規則、成交量正確、撮合後不再交叉、數量守恆。
+#[test]
+fn uncross_matches_brute_force() {
+    let mut rng = exchange_lab::workload::Rng::new(99);
+    for round in 0..300 {
+        let mut b = book();
+        b.set_auction(true);
+        let mut orders = vec![];
+        for id in 1..=(2 + rng.below(40)) {
+            let side = if rng.below(2) == 0 {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
+            let price = 480 + rng.below(40) as Price;
+            let qty = 1 + rng.below(50);
+            orders.push((side, price, qty));
+            run(&mut b, limit(id, side, price, qty));
+        }
+        let reference = 480 + rng.below(40) as Price;
+        let total_before: Qty = orders.iter().map(|o| o.2).sum();
+
+        // 暴力解：所有可能價格（含參考價）中依規則挑選
+        let mut best: Option<(Qty, i64, i64, i64, Price)> = None;
+        let prices: Vec<Price> = (470..=530).collect();
+        let (bb, ba) = (
+            b.best(Side::Buy).map(|x| x.0),
+            b.best(Side::Sell).map(|x| x.0),
+        );
+        let crossed = matches!((bb, ba), (Some(x), Some(y)) if x >= y);
+        for &p in &prices {
+            let buy: Qty = orders
+                .iter()
+                .filter(|o| o.0 == Side::Buy && o.1 >= p)
+                .map(|o| o.2)
+                .sum();
+            let sell: Qty = orders
+                .iter()
+                .filter(|o| o.0 == Side::Sell && o.1 <= p)
+                .map(|o| o.2)
+                .sum();
+            let exec = buy.min(sell);
+            let level = orders.iter().any(|o| o.1 == p) || p == reference;
+            if exec == 0 || !level {
+                continue;
+            }
+            let key = (
+                exec,
+                -((buy as i64 - sell as i64).abs()),
+                -(p - reference).abs(),
+                -p,
+                p,
+            );
+            if best.is_none_or(|k| (key.0, key.1, key.2, key.3) > (k.0, k.1, k.2, k.3)) {
+                best = Some(key);
+            }
+        }
+        let mut ev = vec![];
+        let got = b.uncross(reference, &mut |e| ev.push(e));
+        let want = if crossed {
+            best.map(|k| (k.4, k.0))
+        } else {
+            None
+        };
+        assert_eq!(got, want, "round {round}");
+        b.set_auction(false);
+        let after: Qty = b.snapshot().iter().map(|o| o.3).sum();
+        let traded: Qty = crosses(&ev).iter().map(|c| c.3).sum();
+        assert_eq!(after + 2 * traded, total_before, "round {round}");
+        if let (Some((x, _)), Some((y, _))) = (b.best(Side::Buy), b.best(Side::Sell)) {
+            assert!(x < y, "still crossed after uncross, round {round}");
+        }
+    }
+}
+
+#[test]
+fn cancel_matching_removes_only_selected_orders() {
+    let mut b = book();
+    for id in 1..=10 {
+        let side = if id % 2 == 0 { Side::Buy } else { Side::Sell };
+        let price = if side == Side::Buy { 90 } else { 110 };
+        run(&mut b, limit(id, side, price, 1));
+    }
+    let mut ev = vec![];
+    let n = b.cancel_matching(|id| id <= 4, &mut |e| ev.push(e));
+    assert_eq!(n, 4);
+    assert_eq!(b.order_count(), 6);
+    assert!(ev
+        .iter()
+        .all(|e| matches!(e, Event::Cancelled { id, .. } if *id <= 4)));
+}

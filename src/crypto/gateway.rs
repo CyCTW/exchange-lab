@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use super::idle::{Clock, Idle};
 use super::model::*;
 use super::msg::*;
 use crate::histogram::Histogram;
+use crate::idle::{Clock, Idle};
 use crate::ring::{Consumer, Producer};
 use crate::types::*;
 use crate::workload::Rng;
@@ -241,7 +241,8 @@ impl Gateway {
     }
 
     fn fair(&self, symbol: SymbolId, t: u64) -> Price {
-        self.path.at(symbol, t.saturating_sub(self.start_ns))
+        self.path
+            .at(symbol as usize, t.saturating_sub(self.start_ns))
     }
 
     /// 做市商：輪流更新買價/賣價，每次「撤舊單 + 掛新單」。
@@ -388,7 +389,7 @@ impl Gateway {
         self.push(self.cfg.risk_of(user), m);
     }
 
-    /// 佇列滿時一邊等一邊消化回報——否則會和風控分片互相等待而死結（見 docs/07）。
+    /// 佇列滿時一邊等一邊消化回報——否則會和風控分片互相等待而死結（見 docs/08）。
     fn push(&mut self, r: usize, mut m: ToRisk) {
         loop {
             match self.io.to_risk[r].try_push(m) {

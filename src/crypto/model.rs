@@ -2,9 +2,10 @@
 
 use std::time::Duration;
 
-use super::idle::IdleKind;
+use crate::idle::IdleKind;
 use crate::types::*;
-use crate::workload::Rng;
+use crate::workload::PriceSpec;
+pub use crate::workload::{PricePath, WeightedPicker};
 
 pub type UserId = u32;
 pub type SymbolId = u16;
@@ -220,61 +221,19 @@ impl SimConfig {
     }
 }
 
-/// 以累積權重表抽樣（Zipf：少數商品吃掉大部分流量）。
-pub struct WeightedPicker {
-    cumulative: Vec<u64>,
-}
-
-impl WeightedPicker {
-    pub fn new(weights: &[f64]) -> Self {
-        let total: f64 = weights.iter().sum();
-        let mut acc = 0u64;
-        let cumulative = weights
-            .iter()
-            .map(|w| {
-                acc += ((w / total) * 1e9).max(1.0) as u64;
-                acc
-            })
-            .collect();
-        WeightedPicker { cumulative }
-    }
-    #[inline]
-    pub fn pick(&self, rng: &mut Rng) -> usize {
-        let x = rng.below(*self.cumulative.last().unwrap());
-        self.cumulative.partition_point(|&c| c <= x)
-    }
-}
-
-/// 每個商品的「公允價」隨機漫步，每毫秒一步。所有 gateway 共用同一條路徑，
-/// 讓不同 gateway 上的用戶對價格有一致的認知。
-pub struct PricePath {
-    steps: Vec<Vec<Price>>,
-}
-
-impl PricePath {
-    pub fn new(symbols: &[SymbolSpec], millis: usize, seed: u64) -> Self {
-        let steps = symbols
-            .iter()
-            .map(|s| {
-                let mut rng = Rng::new(seed ^ (0x9E37 + s.id as u64 * 7919));
-                let band = s.max_price - s.min_price;
-                let (lo, hi) = (s.min_price + band / 5, s.max_price - band / 5);
-                let step = (s.init_price / 5_000).max(1);
-                let mut p = s.init_price;
-                (0..millis)
-                    .map(|_| {
-                        p = (p + (rng.below(3) as Price - 1) * step).clamp(lo, hi);
-                        p
-                    })
-                    .collect()
-            })
-            .collect();
-        PricePath { steps }
-    }
-
-    #[inline]
-    pub fn at(&self, symbol: SymbolId, elapsed_ns: u64) -> Price {
-        let v = &self.steps[symbol as usize];
-        v[((elapsed_ns / 1_000_000) as usize).min(v.len() - 1)]
-    }
+/// 每個商品的公允價路徑：在價格帶中間 60% 內漫步，每步約 0.02%。
+pub fn price_path(symbols: &[SymbolSpec], millis: usize, seed: u64) -> PricePath {
+    let specs: Vec<PriceSpec> = symbols
+        .iter()
+        .map(|s| {
+            let band = s.max_price - s.min_price;
+            PriceSpec {
+                init: s.init_price,
+                lo: s.min_price + band / 5,
+                hi: s.max_price - band / 5,
+                step: (s.init_price / 5_000).max(1),
+            }
+        })
+        .collect();
+    PricePath::new(&specs, millis, seed)
 }

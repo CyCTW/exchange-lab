@@ -112,7 +112,9 @@ impl RejectCode {
             RejectReason::PriceOutOfBand => RejectCode::PriceOutOfBand,
             RejectReason::BookFull => RejectCode::BookFull,
             RejectReason::DuplicateId => RejectCode::DuplicateId,
-            RejectReason::InvalidQty | RejectReason::UnknownOrder => RejectCode::InvalidOrder,
+            RejectReason::InvalidQty | RejectReason::UnknownOrder | RejectReason::InvalidPhase => {
+                RejectCode::InvalidOrder
+            }
         }
     }
 }

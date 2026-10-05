@@ -1,4 +1,7 @@
-# 07 · 多用戶、多商品的交易所模擬與架構設計
+# 08 · 加密貨幣交易所：多用戶、多商品與即時餘額（之後深入探討）
+
+> 本 lab 目前的主線是 [07 · 傳統交易所架構](07-traditional-architecture.md)。這一章是先做的加密貨幣（現貨）交易所模型，
+> 重點在傳統交易所沒有的問題：**數百萬用戶的即時餘額凍結與跨分片結算**。之後會回來和傳統架構逐項比較、補上 7×24 與合約保證金。
 
 前幾章的原型只有「一本簿、一個下單來源」。真實交易所要面對的是：
 
@@ -7,10 +10,10 @@
 - **帳戶餘額** 是跨商品共享的：同一個用戶用同一筆 USDT 同時在 BTC/USDT 和 ETH/USDT 下單。
 - 限流、餘額不足、撤單時訂單已成交……各種「不快樂路徑」。
 
-這一章把這些需求變成一個可以跑、可以量、可以驗證的模擬器：[`src/sim/`](../src/sim/)、[`src/bin/sim.rs`](../src/bin/sim.rs)。
+這一章把這些需求變成一個可以跑、可以量、可以驗證的模擬器：[`src/crypto/`](../src/crypto/)、[`src/bin/crypto_sim.rs`](../src/bin/crypto_sim.rs)。
 
 ```bash
-cargo run --release --bin sim -- --gateways 2 --risk 2 --matchers 2 --users 10000 --symbols 8 --rate 200000 --secs 5
+cargo run --release --bin crypto_sim -- --gateways 2 --risk 2 --matchers 2 --users 10000 --symbols 8 --rate 200000 --secs 5
 ```
 
 ## 1. 模擬的市場
@@ -180,7 +183,7 @@ matcher-0：送結算給 risk-0，ring 滿 → 等 risk-0 消化     ⇒ 兩邊�
 [OK] fill = 2 × 成交 = 2 × 行情成交
 ```
 
-只要任何一條訊息在執行緒之間遺失、重複或處理錯誤，這些檢查就會失敗。`tests/sim.rs` 在多種拓樸與極小佇列下都會驗證這些檢查。
+只要任何一條訊息在執行緒之間遺失、重複或處理錯誤，這些檢查就會失敗。`tests/crypto_sim.rs` 在多種拓樸與極小佇列下都會驗證這些檢查。
 
 ## 6. 尚未模擬、但真實交易所需要的
 

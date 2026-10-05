@@ -111,3 +111,73 @@ pub fn generate(n: usize, cfg: &WorkloadConfig) -> Vec<Command> {
     }
     cmds
 }
+
+/// 以累積權重表抽樣（例如 Zipf：少數商品吃掉大部分流量）。
+pub struct WeightedPicker {
+    cumulative: Vec<u64>,
+}
+
+impl WeightedPicker {
+    pub fn new(weights: &[f64]) -> Self {
+        let total: f64 = weights.iter().sum();
+        let mut acc = 0u64;
+        let cumulative = weights
+            .iter()
+            .map(|w| {
+                acc += ((w / total) * 1e9).max(1.0) as u64;
+                acc
+            })
+            .collect();
+        WeightedPicker { cumulative }
+    }
+    #[inline]
+    pub fn pick(&self, rng: &mut Rng) -> usize {
+        let x = rng.below(*self.cumulative.last().unwrap());
+        self.cumulative.partition_point(|&c| c <= x)
+    }
+}
+
+pub fn zipf_weights(n: usize, s: f64) -> Vec<f64> {
+    (0..n).map(|i| 1.0 / ((i + 1) as f64).powf(s)).collect()
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PriceSpec {
+    pub init: Price,
+    pub lo: Price,
+    pub hi: Price,
+    /// 每一步的價格變動（tick 數）。
+    pub step: Price,
+}
+
+/// 每個商品的「公允價」隨機漫步，每毫秒一步。所有模擬參與者共用同一條路徑，
+/// 讓不同 gateway 上的參與者對價格有一致的認知。
+pub struct PricePath {
+    steps: Vec<Vec<Price>>,
+}
+
+impl PricePath {
+    pub fn new(specs: &[PriceSpec], millis: usize, seed: u64) -> Self {
+        let steps = specs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let mut rng = Rng::new(seed ^ (0x9E37 + i as u64 * 7919));
+                let mut p = s.init;
+                (0..millis.max(1))
+                    .map(|_| {
+                        p = (p + (rng.below(3) as Price - 1) * s.step).clamp(s.lo, s.hi);
+                        p
+                    })
+                    .collect()
+            })
+            .collect();
+        PricePath { steps }
+    }
+
+    #[inline]
+    pub fn at(&self, idx: usize, elapsed_ns: u64) -> Price {
+        let v = &self.steps[idx];
+        v[((elapsed_ns / 1_000_000) as usize).min(v.len() - 1)]
+    }
+}

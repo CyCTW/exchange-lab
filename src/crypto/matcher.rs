@@ -3,9 +3,9 @@
 //! 只關心價格與數量，不知道任何帳戶餘額——資金在風控分片就已經凍結好了。
 //! 成交結果拆成兩筆 Fill（taker、maker 各一筆），各自送回該用戶所屬的風控分片。
 
-use super::idle::Idle;
 use super::model::*;
 use super::msg::*;
+use crate::idle::Idle;
 use crate::orderbook::{BookConfig, OrderBook};
 use crate::ring::{Consumer, Producer};
 use crate::types::*;
@@ -195,6 +195,7 @@ impl Matcher {
                         t,
                     });
                 }
+                Event::Cross { .. } => unreachable!("no auctions in the crypto model"),
                 Event::Cancelled { id, remaining } => self.settle(
                     id,
                     Settle::Done {

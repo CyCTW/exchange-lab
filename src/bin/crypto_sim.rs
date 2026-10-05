@@ -1,7 +1,7 @@
 //! 多用戶、多商品交易所模擬。
 //!
 //! ```text
-//! cargo run --release --bin sim -- [--gateways G] [--risk R] [--matchers M]
+//! cargo run --release --bin crypto_sim -- [--gateways G] [--risk R] [--matchers M]
 //!     [--users U] [--symbols S] [--rate ACTIONS_PER_SEC] [--secs N]
 //!     [--placement modulo|balanced] [--zipf S] [--idle spin|backoff] [--pin] [--seed N]
 //!     [--mm-limit MSGS_PER_SEC] [--user-limit MSGS_PER_SEC]
@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use exchange_lab::sim::idle::IdleKind;
-use exchange_lab::sim::{self, Placement, SimConfig};
+use exchange_lab::crypto::{self as sim, Placement, SimConfig};
+use exchange_lab::idle::IdleKind;
 
 fn main() {
     let mut cfg = SimConfig::default();

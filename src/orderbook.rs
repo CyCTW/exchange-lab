@@ -161,6 +161,8 @@ pub struct OrderBook {
     orders: Vec<Order>,
     free: Vec<u32>,
     index: IdMap,
+    /// 集合競價（call auction）模式：新委託只掛上簿、不撮合，直到 `uncross`。
+    auction: bool,
 }
 
 impl OrderBook {
@@ -177,6 +179,7 @@ impl OrderBook {
             orders: Vec::with_capacity(cfg.max_orders),
             free: Vec::with_capacity(cfg.max_orders),
             index: IdMap::with_capacity_and_hasher(cfg.max_orders, Default::default()),
+            auction: false,
         }
     }
 
@@ -214,6 +217,9 @@ impl OrderBook {
         if self.index.contains_key(&id) {
             return out(reject(RejectReason::DuplicateId));
         }
+        if self.auction && tif == TimeInForce::Ioc {
+            return out(reject(RejectReason::InvalidPhase));
+        }
         // 撮合只會釋放 slot，所以事先檢查容量是保守而安全的。
         if tif == TimeInForce::Gtc && self.free.is_empty() && self.orders.len() == self.max_orders {
             return out(reject(RejectReason::BookFull));
@@ -221,7 +227,11 @@ impl OrderBook {
         out(Event::Accepted { id });
 
         let idx = (price - self.min_price) as u32;
-        let remaining = self.match_order(id, side, idx, qty, out);
+        let remaining = if self.auction {
+            qty
+        } else {
+            self.match_order(id, side, idx, qty, out)
+        };
         if remaining == 0 {
             return;
         }
@@ -403,6 +413,178 @@ impl OrderBook {
             id,
             remaining: o.qty,
         });
+    }
+
+    pub fn set_auction(&mut self, on: bool) {
+        debug_assert!(
+            on || !self.is_crossed(),
+            "leaving auction with a crossed book; uncross first"
+        );
+        self.auction = on;
+    }
+
+    pub fn in_auction(&self) -> bool {
+        self.auction
+    }
+
+    pub fn contains(&self, id: OrderId) -> bool {
+        self.index.contains_key(&id)
+    }
+
+    /// 掛單目前的剩餘數量；不在簿上則為 `None`。
+    pub fn order_qty(&self, id: OrderId) -> Option<Qty> {
+        self.index.get(&id).map(|&s| self.orders[s as usize].qty)
+    }
+
+    fn is_crossed(&self) -> bool {
+        self.bids.best != NIL && self.asks.best != NIL && self.bids.best >= self.asks.best
+    }
+
+    /// 撤掉所有符合條件的委託（kill switch、斷線自動撤單）。依訂單編號排序後撤，確保結果確定。
+    /// 這裡掃描整個索引；真實系統會另外維護「會員 → 委託」索引。
+    pub fn cancel_matching(
+        &mut self,
+        pred: impl Fn(OrderId) -> bool,
+        out: &mut impl FnMut(Event),
+    ) -> usize {
+        let mut ids: Vec<OrderId> = self.index.keys().copied().filter(|id| pred(*id)).collect();
+        ids.sort_unstable();
+        for &id in &ids {
+            self.cancel(id, out);
+        }
+        ids.len()
+    }
+
+    /// 集合競價撮合（開盤、收盤、暫停後恢復）。
+    ///
+    /// 在交叉區間內選出單一競價價格：
+    /// 可成交量最大 → 未成交量（買賣差）最小 → 最接近參考價 → 價格較低。
+    /// 候選價格是交叉區間內的各價格層，以及落在區間內的參考價。
+    /// 然後雙方依價格-時間優先，全部以該價格成交。回傳 (價格, 成交量)。
+    pub fn uncross(
+        &mut self,
+        reference: Price,
+        out: &mut impl FnMut(Event),
+    ) -> Option<(Price, Qty)> {
+        if !self.is_crossed() {
+            return None;
+        }
+        let (bb, ba) = (self.bids.best, self.asks.best);
+        // 交叉區間 [ba, bb] 內的價格層（遞增排序）。
+        let mut bids = Vec::new();
+        let mut i = bb;
+        while i != NIL && i >= ba {
+            bids.push((i, self.bids.levels[i as usize].qty));
+            i = if i == 0 {
+                NIL
+            } else {
+                self.bids.bitmap.next_at_or_below(i - 1)
+            };
+        }
+        bids.reverse();
+        let mut asks = Vec::new();
+        let mut i = ba;
+        while i != NIL && i <= bb {
+            asks.push((i, self.asks.levels[i as usize].qty));
+            i = if (i as usize) + 1 >= self.asks.levels.len() {
+                NIL
+            } else {
+                self.asks.bitmap.next_at_or_above(i + 1)
+            };
+        }
+        let ref_idx =
+            (reference - self.min_price).clamp(0, (self.bids.levels.len() - 1) as Price) as u32;
+        let mut cands: Vec<u32> = bids.iter().chain(&asks).map(|x| x.0).collect();
+        // 參考價落在交叉區間內時也列為候選：條件都相同時就以參考價成交。
+        if (ba..=bb).contains(&ref_idx) {
+            cands.push(ref_idx);
+        }
+        cands.sort_unstable();
+        cands.dedup();
+
+        let mut buy_cum: Qty = bids.iter().map(|x| x.1).sum();
+        let mut sell_cum: Qty = 0;
+        let (mut bi, mut ai) = (0, 0);
+        // (成交量, -買賣差, -距參考價, -價格) 取最大
+        let mut best: Option<(Qty, i128, i64, i64, u32)> = None;
+        for &p in &cands {
+            while bi < bids.len() && bids[bi].0 < p {
+                buy_cum -= bids[bi].1;
+                bi += 1;
+            }
+            while ai < asks.len() && asks[ai].0 <= p {
+                sell_cum += asks[ai].1;
+                ai += 1;
+            }
+            let exec = buy_cum.min(sell_cum);
+            let key = (
+                exec,
+                -((buy_cum as i128 - sell_cum as i128).abs()),
+                -(p as i64 - ref_idx as i64).abs(),
+                -(p as i64),
+                p,
+            );
+            if best.is_none_or(|b| (key.0, key.1, key.2, key.3) > (b.0, b.1, b.2, b.3)) {
+                best = Some(key);
+            }
+        }
+        let (volume, .., p) = best?;
+        let price = self.min_price + p as Price;
+        let mut remaining = volume;
+        while remaining > 0 {
+            let b = self.orders[self.bids.levels[self.bids.best as usize].head as usize];
+            let a = self.orders[self.asks.levels[self.asks.best as usize].head as usize];
+            debug_assert!(self.bids.best >= p && self.asks.best <= p);
+            let q = b.qty.min(a.qty).min(remaining);
+            out(Event::Cross {
+                buy: b.id,
+                sell: a.id,
+                price,
+                qty: q,
+            });
+            self.reduce_head(Side::Buy, q);
+            self.reduce_head(Side::Sell, q);
+            remaining -= q;
+        }
+        debug_assert!(!self.is_crossed());
+        Some((price, volume))
+    }
+
+    /// 減少最佳價層隊首委託的數量；歸零則移除，層空了就更新最佳價。
+    fn reduce_head(&mut self, side: Side, q: Qty) {
+        let book = match side {
+            Side::Buy => &mut self.bids,
+            Side::Sell => &mut self.asks,
+        };
+        let best = book.best;
+        let level = &mut book.levels[best as usize];
+        let slot = level.head;
+        let o = &mut self.orders[slot as usize];
+        o.qty -= q;
+        level.qty -= q;
+        if o.qty > 0 {
+            return;
+        }
+        let (id, next) = (o.id, o.next);
+        self.index.remove(&id);
+        level.head = next;
+        if next == NIL {
+            level.tail = NIL;
+        } else {
+            self.orders[next as usize].prev = NIL;
+        }
+        level.count -= 1;
+        self.free.push(slot);
+        if level.count == 0 {
+            book.bitmap.clear(best);
+            book.best = match side {
+                Side::Buy if best > 0 => book.bitmap.next_at_or_below(best - 1),
+                Side::Sell if (best as usize) + 1 < book.levels.len() => {
+                    book.bitmap.next_at_or_above(best + 1)
+                }
+                _ => NIL,
+            };
+        }
     }
 
     fn side(&self, side: Side) -> &BookSide {

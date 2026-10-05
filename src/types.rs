@@ -55,6 +55,8 @@ pub enum RejectReason {
     DuplicateId,
     UnknownOrder,
     BookFull,
+    /// 目前的交易階段不接受這種委託（例如集合競價期間送 IOC）。
+    InvalidPhase,
 }
 
 /// 撮合引擎的輸出。下游（行情發布、回報、清算）都只消費這個事件流。
@@ -71,6 +73,13 @@ pub enum Event {
         taker: OrderId,
         maker: OrderId,
         taker_side: Side,
+        price: Price,
+        qty: Qty,
+    },
+    /// 集合競價撮合：雙方都是簿上的掛單，以單一競價價格成交。
+    Cross {
+        buy: OrderId,
+        sell: OrderId,
         price: Price,
         qty: Qty,
     },

@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use exchange_lab::sim::idle::IdleKind;
-use exchange_lab::sim::{self, Placement, SimConfig};
+use exchange_lab::crypto::{self as sim, Placement, SimConfig};
+use exchange_lab::idle::IdleKind;
 
 fn small(gateways: usize, risk: usize, matchers: usize) -> SimConfig {
     SimConfig {

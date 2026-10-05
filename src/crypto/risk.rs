@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
-use super::idle::Idle;
 use super::model::*;
 use super::msg::*;
+use crate::idle::Idle;
 use crate::orderbook::IdHasher;
 use crate::ring::{Consumer, Producer};
 use crate::types::*;

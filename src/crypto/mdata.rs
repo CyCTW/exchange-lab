@@ -3,9 +3,9 @@
 //! 真實系統會在這裡編碼成 ITCH/SBE 風格的二進位訊息、加序號、經 UDP multicast 發送；
 //! 這裡只維護每個商品的統計，並量測「請求預定送出 → 行情發布」的延遲。
 
-use super::idle::{Clock, Idle};
 use super::msg::*;
 use crate::histogram::Histogram;
+use crate::idle::{Clock, Idle};
 use crate::ring::Consumer;
 use crate::types::*;
 
@@ -29,7 +29,7 @@ pub fn run(
     from_m: Vec<Consumer<MdMsg>>,
     symbols: usize,
     clock: Clock,
-    idle: super::idle::IdleKind,
+    idle: crate::idle::IdleKind,
 ) -> MdStats {
     let mut idle = Idle::new(idle);
     let mut st = MdStats {
